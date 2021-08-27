@@ -212,16 +212,48 @@ abstract contract ReentrancyGuard {
     }
 }
 
-contract Gauge is ReentrancyGuard {
+contract ProtocolGovernance {
+    /// @notice governance address for the governance contract
+    address public governance;
+    address public pendingGovernance;
+    
+    /**
+     * @notice Allows governance to change governance (for future upgradability)
+     * @param _governance new governance address to set
+     */
+    function setGovernance(address _governance) external {
+        require(msg.sender == governance, "setGovernance: !gov");
+        pendingGovernance = _governance;
+    }
+
+    /**
+     * @notice Allows pendingGovernance to accept their role as governance (protection pattern)
+     */
+    function acceptGovernance() external {
+        require(msg.sender == pendingGovernance, "acceptGovernance: !pendingGov");
+        governance = pendingGovernance;
+    }
+
+    /**
+     * @notice modifier to allow for easy gov only control over a function
+     */
+    modifier onlyGovernance() {
+        require(msg.sender == governance, "!gov");
+        _;
+    }
+}
+
+contract GaugeV2 is ReentrancyGuard, ProtocolGovernance {
     using SafeMath for uint256;
     using SafeERC20 for IERC20;
     
-    IERC20 public constant PICKLE = IERC20(0x429881672B9AE42b8EbA0E26cD9C73711b891Ca5);
-    IERC20 public constant DILL = IERC20(0xbBCf169eE191A1Ba7371F30A1C344bFC498b29Cf);
-    address public constant TREASURY = address(0x066419EaEf5DE53cc5da0d8702b990c5bc7D1AB3);
+	//FUJI testnet
+    IERC20 public constant SNOWBALL = IERC20(0xC38f41A296A4493Ff429F1238e030924A1542e50);
+    IERC20 public constant SNOWCONE = IERC20(0x83952E7ab4aca74ca96217D6F8f7591BEaD6D64E);
+    address public constant TREASURY = address(0x294aB3200ef36200db84C4128b7f1b4eec71E38a);
     
     IERC20 public immutable TOKEN;
-    address public immutable DISTRIBUTION;
+    address public DISTRIBUTION;
     uint256 public constant DURATION = 7 days;
     
     uint256 public periodFinish = 0;
@@ -243,9 +275,16 @@ contract Gauge is ReentrancyGuard {
     mapping(address => uint256) public derivedBalances;
     mapping(address => uint) private _base;
     
-    constructor(address _token) public {
+    constructor(address _token, address _governance) public {
         TOKEN = IERC20(_token);
         DISTRIBUTION = msg.sender;
+        governance = _governance;
+    }
+
+    // This function is to allow us to update the gaugeProxy 
+    // without resetting the old gauges.
+    function changeDistribution(address _distribution) external onlyGovernance {
+        DISTRIBUTION = _distribution;
     }
     
     function totalSupply() external view returns (uint256) {
@@ -273,7 +312,7 @@ contract Gauge is ReentrancyGuard {
     function derivedBalance(address account) public view returns (uint) {
         uint _balance = _balances[account];
         uint _derived = _balance.mul(40).div(100);
-        uint _adjusted = (_totalSupply.mul(DILL.balanceOf(account)).div(DILL.totalSupply())).mul(60).div(100);
+        uint _adjusted = (_totalSupply.mul(SNOWCONE.balanceOf(account)).div(SNOWCONE.totalSupply())).mul(60).div(100);
         return Math.min(_derived.add(_adjusted), _balance);
     }
     
@@ -333,7 +372,7 @@ contract Gauge is ReentrancyGuard {
         uint256 reward = rewards[msg.sender];
         if (reward > 0) {
             rewards[msg.sender] = 0;
-            PICKLE.safeTransfer(msg.sender, reward);
+            SNOWBALL.safeTransfer(msg.sender, reward);
             emit RewardPaid(msg.sender, reward);
         }
     }
@@ -344,7 +383,7 @@ contract Gauge is ReentrancyGuard {
     }
     
     function notifyRewardAmount(uint256 reward) external onlyDistribution updateReward(address(0)) {
-        PICKLE.safeTransferFrom(DISTRIBUTION, address(this), reward);
+        SNOWBALL.safeTransferFrom(DISTRIBUTION, address(this), reward);
         if (block.timestamp >= periodFinish) {
             rewardRate = reward.div(DURATION);
         } else {
@@ -357,7 +396,7 @@ contract Gauge is ReentrancyGuard {
         // This keeps the reward rate in the right range, preventing overflows due to
         // very high values of rewardRate in the earned and rewardsPerToken functions;
         // Reward + leftover must be less than 2^256 / 10^18 to avoid overflow.
-        uint balance = PICKLE.balanceOf(address(this));
+        uint balance = SNOWBALL.balanceOf(address(this));
         require(rewardRate <= balance.div(DURATION), "Provided reward too high");
 
         lastUpdateTime = block.timestamp;
@@ -384,43 +423,21 @@ contract Gauge is ReentrancyGuard {
     event RewardPaid(address indexed user, uint256 reward);
 }
 
-interface MasterChef {
+interface IceQueen {
     function deposit(uint, uint) external;
     function withdraw(uint, uint) external;
     function userInfo(uint, address) external view returns (uint, uint);
 }
 
-contract ProtocolGovernance {
-    /// @notice governance address for the governance contract
-    address public governance;
-    address public pendingGovernance;
-    
-    /**
-     * @notice Allows governance to change governance (for future upgradability)
-     * @param _governance new governance address to set
-     */
-    function setGovernance(address _governance) external {
-        require(msg.sender == governance, "setGovernance: !gov");
-        pendingGovernance = _governance;
-    }
 
-    /**
-     * @notice Allows pendingGovernance to accept their role as governance (protection pattern)
-     */
-    function acceptGovernance() external {
-        require(msg.sender == pendingGovernance, "acceptGovernance: !pendingGov");
-        governance = pendingGovernance;
-    }
-}
-
-contract MasterDill {
+contract MakeSnowCones {
     using SafeMath for uint;
 
     /// @notice EIP-20 token name for this token
-    string public constant name = "Master DILL";
+    string public constant name = "Make SNOWCONES";
 
     /// @notice EIP-20 token symbol for this token
-    string public constant symbol = "mDILL";
+    string public constant symbol = "mSNOWCONES";
 
     /// @notice EIP-20 token decimals for this token
     uint8 public constant decimals = 18;
@@ -519,25 +536,31 @@ contract MasterDill {
     }
 }
 
-contract GaugeProxy is ProtocolGovernance {
+contract GaugeProxyV2 is ProtocolGovernance {
     using SafeMath for uint256;
     using SafeERC20 for IERC20;
     
-    MasterChef public constant MASTER = MasterChef(0xbD17B1ce622d73bD438b9E658acA5996dc394b0d);
-    IERC20 public constant DILL = IERC20(0xbBCf169eE191A1Ba7371F30A1C344bFC498b29Cf);
-    IERC20 public constant PICKLE = IERC20(0x429881672B9AE42b8EbA0E26cD9C73711b891Ca5);
+    IceQueen public constant MASTER = IceQueen(0xB12531a2d758c7a8BF09f44FC88E646E1BF9D375);
+    IERC20 public constant SNOWCONE = IERC20(0x83952E7ab4aca74ca96217D6F8f7591BEaD6D64E);
+    IERC20 public constant SNOWBALL = IERC20(0xC38f41A296A4493Ff429F1238e030924A1542e50);
     
     IERC20 public immutable TOKEN;
     
     uint public pid;
     uint public totalWeight;
+    uint private lockedTotalWeight;
+    uint private lockedBalance;
+    uint private locktime;
     
     address[] internal _tokens;
     mapping(address => address) public gauges; // token => gauge
+    mapping(address => address) public deprecated; // token => gauge
     mapping(address => uint) public weights; // token => weight
-    mapping(address => mapping(address => uint)) public votes; // msg.sender => votes
+    mapping(address => uint) private lockedWeights; // token => weight
+    mapping(address => mapping(address => uint)) public votes; // msg.sender => token => votes
     mapping(address => address[]) public tokenVote;// msg.sender => token
     mapping(address => uint) public usedWeights;  // msg.sender => total voting weight of user
+    
     
     function tokens() external view returns (address[] memory) {
         return _tokens;
@@ -548,7 +571,7 @@ contract GaugeProxy is ProtocolGovernance {
     }
     
     constructor() public {
-        TOKEN = IERC20(address(new MasterDill()));
+        TOKEN = IERC20(address(new MakeSnowCones()));
         governance = msg.sender;
     }
     
@@ -577,14 +600,14 @@ contract GaugeProxy is ProtocolGovernance {
         delete tokenVote[_owner];
     }
     
-    // Adjusts _owner's votes according to latest _owner's DILL balance
+    // Adjusts _owner's votes according to latest _owner's SNOWCONE balance
     function poke(address _owner) public {
         address[] memory _tokenVote = tokenVote[_owner];
         uint256 _tokenCnt = _tokenVote.length;
         uint256[] memory _weights = new uint[](_tokenCnt);
         
         uint256 _prevUsedWeight = usedWeights[_owner];
-        uint256 _weight = DILL.balanceOf(_owner);        
+        uint256 _weight = SNOWCONE.balanceOf(_owner);        
 
         for (uint256 i = 0; i < _tokenCnt; i ++) {
             uint256 _prevWeight = votes[_owner][_tokenVote[i]];
@@ -598,7 +621,7 @@ contract GaugeProxy is ProtocolGovernance {
         // _weights[i] = percentage * 100
         _reset(_owner);
         uint256 _tokenCnt = _tokenVote.length;
-        uint256 _weight = DILL.balanceOf(_owner);
+        uint256 _weight = SNOWCONE.balanceOf(_owner);
         uint256 _totalVoteWeight = 0;
         uint256 _usedWeight = 0;
 
@@ -624,31 +647,53 @@ contract GaugeProxy is ProtocolGovernance {
     }
     
     
-    // Vote with DILL on a gauge
+    // Vote with SNOWCONE on a gauge
+    // _tokenVote: the array of tokens which will recieve tokens
+    // _weights: the weights to associate with the tokens listed in _tokenVote
     function vote(address[] calldata _tokenVote, uint256[] calldata _weights) external {
         require(_tokenVote.length == _weights.length);
         _vote(msg.sender, _tokenVote, _weights);
     }
     
     // Add new token gauge
-    function addGauge(address _token) external {
-        require(msg.sender == governance, "!gov");
+    function addGauge(address _token) external onlyGovernance {
         require(gauges[_token] == address(0x0), "exists");
-        gauges[_token] = address(new Gauge(_token));
+        gauges[_token] = address(new GaugeV2(_token, governance));
+        _tokens.push(_token);
+    }
+
+    // Deprecate existing gauge
+    function deprecateGauge(address _token) external onlyGovernance {
+        require(gauges[_token] != address(0x0), "does not exist");
+        deprecated[_token] = gauges[_token];
+        delete gauges[_token];
+        totalWeight = totalWeight.sub(weights[_token]);
+        delete weights[_token];
+    }
+
+    // Bring Deprecated gauge back into use
+    function resurrectGauge(address _token) external onlyGovernance {
+        require(gauges[_token] == address(0x0), "exists");
+        gauges[_token] = deprecated[_token];
+        delete deprecated[_token];
+    }
+
+    // Add existing gauge
+    function migrateGauge(address _gauge, address _token) external onlyGovernance {
+        require(gauges[_token] == address(0x0), "exists");
+        gauges[_token] = _gauge;
         _tokens.push(_token);
     }
     
-    
-    // Sets MasterChef PID
-    function setPID(uint _pid) external {
-        require(msg.sender == governance, "!gov");
+    // Sets IceQueen PID
+    function setPID(uint _pid) external onlyGovernance {
         require(pid == 0, "pid has already been set");
         require(_pid > 0, "invalid pid");
         pid = _pid;
     }
     
     
-    // Deposits mDILL into MasterChef
+    // Deposits mSNOWCONES into IceQueen
     function deposit() public {
         require(pid > 0, "pid not initialized");
         IERC20 _token = TOKEN;
@@ -659,7 +704,7 @@ contract GaugeProxy is ProtocolGovernance {
     }
     
     
-    // Fetches Pickle
+    // Fetches Snowball
     function collect() public {
         (uint _locked,) = MASTER.userInfo(pid, address(this));
         MASTER.withdraw(pid, _locked);
@@ -669,19 +714,32 @@ contract GaugeProxy is ProtocolGovernance {
     function length() external view returns (uint) {
         return _tokens.length;
     }
-    
-    function distribute() external {
+
+    function preDistribute() external onlyGovernance {
+        lockedTotalWeight = totalWeight;
+        for (uint i = 0; i < _tokens.length; i++) {
+          lockedWeights[_tokens[i]] = weights[_tokens[i]];
+        }
         collect();
-        uint _balance = PICKLE.balanceOf(address(this));
-        if (_balance > 0 && totalWeight > 0) {
-            for (uint i = 0; i < _tokens.length; i++) {
+        lockedBalance = SNOWBALL.balanceOf(address(this));
+        locktime = block.timestamp;
+    }
+
+    
+    function distribute(uint _start, uint _end) external onlyGovernance {
+        require(_start < _end, "bad _start");
+        require(_end <= _tokens.length, "bad _end");
+        require(locktime + 21600 >= block.timestamp, "lock expired");
+        if (lockedBalance > 0 && lockedTotalWeight > 0) {
+            for (uint i = _start; i < _end; i++) {
                 address _token = _tokens[i];
                 address _gauge = gauges[_token];
-                uint _reward = _balance.mul(weights[_token]).div(totalWeight);
+                // need to consider 0x0 gauges here
+                uint _reward = lockedBalance.mul(lockedWeights[_token]).div(totalWeight);
                 if (_reward > 0) {
-                    PICKLE.safeApprove(_gauge, 0);
-                    PICKLE.safeApprove(_gauge, _reward);
-                    Gauge(_gauge).notifyRewardAmount(_reward);
+                    SNOWBALL.safeApprove(_gauge, 0);
+                    SNOWBALL.safeApprove(_gauge, _reward);
+                    GaugeV2(_gauge).notifyRewardAmount(_reward);
                 }
             }
         }
